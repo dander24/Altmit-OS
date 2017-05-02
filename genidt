@@ -1,0 +1,19 @@
+#!/bin/bash
+for i in $(seq 0 255);
+do
+	echo extern void* irq${i}_handler"(int irq, int error);";
+done
+
+echo
+echo
+
+for i in $(seq 0 255);
+do
+	echo '\t'irqaddr = '('uint64_t')' '&'irq${i}_handler';';
+	echo '\t'"temp.OFF63_32 = (uint32_t) (irqaddr >> 32);";
+	echo '\t'"temp.OFF31_16 = (uint16_t) (irqaddr >> 16);";
+	echo '\t'"temp.OFF15_0 = (uint16_t) irqaddr;";
+	echo '\t'IDT'['${i}']' = temp';';
+	echo
+done
+

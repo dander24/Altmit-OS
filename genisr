@@ -1,0 +1,19 @@
+#!/bin/bash
+for i in $(seq 0 255);
+do
+
+	echo global irq${i}_handler;
+done
+
+
+echo
+echo
+
+for i in $(seq 0 255);
+do
+	echo irq${i}_handler:;
+	echo '\t'push rdi
+	echo '\t'mov rdi, ${i}
+	echo '\t'jmp common_irq_handler
+	echo
+done
