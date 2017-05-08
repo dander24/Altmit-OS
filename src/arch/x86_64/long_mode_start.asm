@@ -15,6 +15,8 @@ long_mode_start:
 	mov es, ax
 	mov fs, ax
 	mov gs, ax
+	mov rax, cr3
+	mov cr3, rax
 
 	;print 'okay' until I can be assed to change it
 	mov rax, 0x2f592f412f4b2f4f
