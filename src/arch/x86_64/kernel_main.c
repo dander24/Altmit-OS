@@ -5,6 +5,8 @@
 #include "serial.h"
 #include "mmu.h"
 #include "string.h"
+#include "mmu.h"
+#include "kmalloc.h"
 
 void test_mmu()
 {
@@ -71,6 +73,80 @@ void test_mmu()
 	}
 }
 
+void test_mmu2()
+{
+	long* zastack = alloc_stack();
+	printk("%p \n", zastack);
+	zastack = zastack - 4096;
+	*zastack = 40;
+	printk("%d \n", *zastack);
+	alloc_heap(511);
+	long* temp2 = alloc_heap(2);
+	printk("temp2 %p\n", temp2);
+	*temp2 = 30;
+	temp2[513] = 50;
+	printk("temp2 %d %d\n", *temp2, temp2[513]);
+	free_heap(temp2, 2);
+	temp2 = alloc_heap(2);
+	printk("temp2 %p\n", temp2);
+	*temp2 = 50;
+	temp2[513] = 30;
+	printk("temp2 %d %d\n", *temp2, temp2[513]);
+	free_heap(temp2, 2);
+}
+
+static unsigned int seed = 1;
+static void srand (int newseed) {
+    seed = (unsigned)newseed & 0x7fffffffffffffffU;
+}
+
+int rand (void) {
+    seed = (seed * 6364136223846793005U + 1442695040888963407U)
+                 & 0x7fffffffffffffffU;
+    return (int)seed;
+}
+
+void test_kmal()
+{
+	unsigned int i = 1, z = 1, ran, size;
+	uint64_t* data;
+	void* temp = 0;
+	data = (uint64_t*) kmalloc(sizeof(uint64_t) * 3000);	
+	for(int q = 0; q < 3000; q++)
+		data[q] = 0;
+	
+	while(i)
+	{
+		ran = rand();
+		ran %= 3000;
+		printk("rand %u\n", ran);
+		temp = data[ran];
+		size = rand();
+		size %= 10000;
+		printk("size %d\n",size); 
+		//while(z);
+		if(temp == 0)
+		{
+			data[ran] = kmalloc(size);
+		}
+		else
+		{
+			kfree(data[ran]);
+			data[ran] = 0;
+		}
+	}
+}
+
+void test_kmal2()
+{
+	void* temp = kmalloc(50);
+	unsigned int ran;
+	kfree(temp);
+	ran = rand();
+	ran %= 3000;
+	printk("rand %u\n", ran);
+}
+
 void kernel_main(void* ELF)
 {
 	uint64_t i = 1;
@@ -82,6 +158,8 @@ void kernel_main(void* ELF)
 	SER_init();
 	//while(i)	
 	init_mmu(ELF);
+	init_kmalloc();
+	test_kmal();
 	while(1)
 	{
 		

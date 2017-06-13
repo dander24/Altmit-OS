@@ -5,6 +5,10 @@
 void init_mmu(void*);
 void* alloc_pf(void);
 void free_pf(void*);
+void page_fault_handler(int irq, int error, void* args);
+void* alloc_heap(int numPages);
+void free_heap(void* free_ptr, int numPages);
+void* alloc_stack();
 
 typedef struct CR3_T{
 uint64_t reserved:3;

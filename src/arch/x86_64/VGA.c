@@ -77,6 +77,7 @@ void VGA_display_str(const char *s)
 //intr safe
 int printk(const char* fmt, ...)
 {
+	LOCK;
 	char c;
 	char str[MAXBUFFSIZE];
 	int i = 1; //track location in  format
@@ -183,7 +184,7 @@ int printk(const char* fmt, ...)
 			i++;
 		}
 	}
-	
+	UNLOCK;
 	return 0; //for now?
 }
 

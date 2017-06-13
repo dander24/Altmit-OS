@@ -2,6 +2,7 @@
 #include "string.h"
 #include "mmu.h"
 #include "bio.h"
+#include "interrupt.h"
 #include <stdint-gcc.h>
 
 //tag types
@@ -92,10 +93,10 @@ uint64_t sign_ext:8;
 }__attribute__((packed)) virt_addr;
 
 typedef struct memallocinfo{
-uint16_t p4;
-uint16_t p3;
-uint16_t p2;
-uint16_t p1;
+uint64_t p4;
+uint64_t p3;
+uint64_t p2;
+uint64_t p1;
 } mem_alloc_info;
 
 static mem_block avail_mem[MAX_BLOCKS];
@@ -111,10 +112,51 @@ void flush_tlb()
 	asm volatile ("movq %0, %%cr3": : "r"(temp));
 }
 
-
-void* alloc_stack()
+void page_fault_handler(int irq, int error, void* args)
 {
-	CLI;
+	unsigned long cr2;
+	asm volatile ("mov %%cr2, %0" : "=r"(cr2));
+	
+	virt_addr vadd;
+	vadd =  *((virt_addr*) &cr2);
+	printk("PF_vaddr %p \n", vadd);
+	uint64_t cur = page_table;
+	
+	PT4  *pt4p;
+	PT3  *pt3p;
+	PT2  *pt2p;
+	PT1  *pt1p;
+	pt4p = (PT4*) cur;
+	if(pt4p[vadd.pt4_offset].AVL != 1)
+	{
+		printk("NO PT ENTRY 4");
+		asm("hlt");
+	}
+		
+	pt3p = (PT3*) (pt4p[vadd.pt4_offset].BASE << 12);
+	if(pt3p[vadd.pt3_offset].AVL != 1)
+	{
+		printk("NO PT ENTRY 3");
+		asm("hlt");
+	}
+	pt2p = (PT2*) (pt3p[vadd.pt3_offset].BASE << 12);
+	if(pt2p[vadd.pt2_offset].AVL != 1)
+	{
+		printk("NO PT ENTRY 2\n");
+		asm("hlt");
+	}
+	pt1p = (PT1*) (pt2p[vadd.pt2_offset].BASE << 12);
+	pt1p[vadd.pt1_offset].BASE = ((uint64_t)alloc_pf() >> 12);
+	pt1p[vadd.pt1_offset].AVL = 1;
+	pt1p[vadd.pt1_offset].P = 1;
+	printk("ALLOC %p \n", pt1p[vadd.pt1_offset].BASE << 12);
+	printk("OFFSETS %u %u %u %u\n", vadd.pt4_offset, vadd.pt3_offset, vadd.pt2_offset, vadd.pt1_offset);
+	return;
+}
+
+void* alloc_heap(int numPages)
+{
+	LOCK;
 	uint64_t cur = page_table;
 	PT4  *pt4p;
 	PT3  *pt3p;
@@ -124,64 +166,216 @@ void* alloc_stack()
 	virt_addr ret;
 	void* retval;
 	
-	
-	flush_tlb();
-	pt4p = (PT4*) cur;
-	if(pt4p[cur_stack.p4].A == 0)
-	{
-		pt4p[cur_stack.p4].BASE = ((uint64_t)alloc_pf() >> 12);
-		pt4p[cur_stack.p4].A = 1;
-		pt4p[cur_stack.p4].P = 1;
-		pt4p[cur_stack.p4].US = 0;
-		pt4p[cur_stack.p4].RW = 1;
-	}
-	
-	pt3p = (PT3*) pt4p[cur_stack.p4].BASE;
-	if(pt3p[cur_stack.p3].A == 0)
-	{
-		pt3p[cur_stack.p3].BASE = ((uint64_t)alloc_pf() >> 12);
-		pt3p[cur_stack.p3].A = 1;
-		pt3p[cur_stack.p3].P = 1;
-		pt3p[cur_stack.p3].US = 0;
-		pt3p[cur_stack.p3].RW = 1;
-	}
+	ret.pys_offset = 0;
+	ret.pt1_offset = cur_heap.p1;
+	ret.pt2_offset = cur_heap.p2;
+	ret.pt3_offset = cur_heap.p3;
+	ret.pt4_offset = cur_heap.p4;
+	retval = *((uint64_t*) &ret);
 
-	pt2p = (PT2*) pt3p[cur_stack.p3].BASE;
-	if(pt2p[cur_stack.p2].A == 0)
+	pt4p = (PT4*) cur;
+	for(int i = 0; i < numPages; i++)
 	{
-		pt2p[cur_stack.p2].BASE = ((uint64_t)alloc_pf() >> 12);
-		pt2p[cur_stack.p2].A = 1;
-		pt2p[cur_stack.p2].P = 1;
-		pt2p[cur_stack.p2].US = 0;
-		pt2p[cur_stack.p2].RW = 1;
-	}
-	pt1p = (PT1*) pt2p[cur_stack.p2].BASE;
-	for(int i = 0; i < PCOUNT; i++)
-	{
-		pt1p[cur_stack.p1].A = 0; //needs to be faulted in
-		pt1p[cur_stack.p1].P = 1;
-		pt1p[cur_stack.p1].US = 0;
-		pt1p[cur_stack.p1].RW = 1;
-		cur_stack.p1++; //incr stack state
-	}
-	
-	if(cur_stack.p1 == PCOUNT)
-	{
-		cur_stack.p2++;
-		cur_stack.p1 = 0;
-		if(cur_stack.p2 == PCOUNT)
+		if(pt4p[cur_heap.p4].AVL == 0)
 		{
-			cur_stack.p3++;
-			cur_stack.p2 = 0;
-			if(cur_stack.p3 == PCOUNT)
+			pt4p[cur_heap.p4].BASE = ((uint64_t)alloc_pf() >> 12);
+			pt4p[cur_heap.p4].AVL = 1;
+			pt4p[cur_heap.p4].P = 1;
+			pt4p[cur_heap.p4].US = 0;
+			pt4p[cur_heap.p4].RW = 1;
+		}
+	
+		pt3p = (PT3*) (pt4p[cur_heap.p4].BASE << 12);
+		if(pt3p[cur_heap.p3].AVL == 0)
+		{
+			pt3p[cur_heap.p3].BASE = ((uint64_t)alloc_pf() >> 12);
+			pt3p[cur_heap.p3].AVL = 1;
+			pt3p[cur_heap.p3].P = 1;
+			pt3p[cur_heap.p3].US = 0;
+			pt3p[cur_heap.p3].RW = 1;
+		}
+
+		pt2p = (PT2*) (pt3p[cur_heap.p3].BASE << 12);
+		if(pt2p[cur_heap.p2].AVL == 0)
+		{
+			pt2p[cur_heap.p2].BASE = ((uint64_t)alloc_pf() >> 12);
+			pt2p[cur_heap.p2].AVL = 1;
+			pt2p[cur_heap.p2].P = 1;
+			pt2p[cur_heap.p2].US = 0;
+			pt2p[cur_heap.p2].RW = 1;
+		}
+		pt1p = (PT1*) (pt2p[cur_heap.p2].BASE << 12);
+	
+			pt1p[cur_heap.p1].AVL = 0; //needs to be faulted in
+			pt1p[cur_heap.p1].P = 0;
+			pt1p[cur_heap.p1].US = 0;
+			pt1p[cur_heap.p1].RW = 1;
+			cur_heap.p1++; //incr stack state
+		if(cur_heap.p1 == PCOUNT)
+		{
+			cur_heap.p2++;
+			cur_heap.p1 = 0;
+			if(cur_heap.p2 == PCOUNT)
 			{
-				cur_stack.p4++;
-				cur_stack.p3 = 0;
+				cur_heap.p3++;
+				cur_heap.p2 = 0;
+				if(cur_heap.p3 == PCOUNT)
+				{
+					cur_heap.p4++;
+					cur_heap.p3 = 0;
+				}
 			}
 		}
 	}
+	//return top of stack
+	UNLOCK;
+	return retval;
+}
 
-	printk("%d %d %d %d\n", cur_stack.p1, cur_stack.p2, cur_stack.p3, cur_stack.p4);
+void free_heap(void* free_ptr, int numPages)
+{
+	LOCK;
+	uint64_t cur = page_table;
+	uint64_t temp;
+	PT4  *pt4p;
+	PT3  *pt3p;
+	PT2  *pt2p;
+	PT1  *pt1p;
+	
+	mem_alloc_info free_state;
+	virt_addr free_int;
+	free_int = *((virt_addr*)&free_ptr);
+	free_state.p4 = free_int.pt4_offset;
+	free_state.p3 = free_int.pt3_offset;
+	free_state.p2 = free_int.pt2_offset;
+	free_state.p1 = free_int.pt1_offset;
+
+	pt4p = (PT4*) cur;
+	for(int i = 0; i < numPages; i++)
+	{
+		if(pt4p[free_state.p4].AVL == 0)
+		{
+			printk("FREEING NON PAGE L4");
+			asm("hlt");
+		}
+	
+		pt3p = (PT3*) (pt4p[free_state.p4].BASE << 12);
+		if(pt3p[free_state.p3].AVL == 0)
+		{
+			printk("FREEING NON PAGE L3");
+			asm("hlt");
+		}
+
+		pt2p = (PT2*) (pt3p[free_state.p3].BASE << 12);
+		if(pt2p[free_state.p2].AVL == 0)
+		{
+			printk("FREEING NON PAGE L2");
+			asm("hlt");
+		}
+		pt1p = (PT1*) (pt2p[free_state.p2].BASE << 12);
+		if(pt1p[free_state.p1].AVL == 1)
+		{
+			temp = pt1p[free_state.p1].BASE << 12;
+			printk("FREEING %p \n", temp);
+			free_pf(temp);
+			pt1p[free_state.p1].AVL = 0; //needs to be faulted in
+			pt1p[free_state.p1].P = 0;
+		}
+		free_state.p1++; //incr stack state
+		if(free_state.p1 == PCOUNT)
+		{
+			free_state.p2++;
+			free_state.p1 = 0;
+			if(free_state.p2 == PCOUNT)
+			{
+				free_state.p3++;
+				free_state.p2= 0;
+				if(free_state.p3 == PCOUNT)
+				{
+					free_state.p4++;
+					free_state.p3 = 0;
+				}
+			}
+		}
+	}
+	UNLOCK;
+}
+
+void* alloc_stack()
+{
+	LOCK;
+	uint64_t cur = page_table;
+	PT4  *pt4p;
+	PT3  *pt3p;
+	PT2  *pt2p;
+	PT1  *pt1p;
+	
+	virt_addr ret;
+	void* retval;
+	int q = 1;
+	
+	pt4p = (PT4*) cur;
+	for(int i = 0; i < PCOUNT; i++)
+	{
+		if(pt4p[cur_stack.p4].AVL == 0)
+		{
+			pt4p[cur_stack.p4].BASE = ((uint64_t)alloc_pf() >> 12);
+			pt4p[cur_stack.p4].AVL = 1;
+			pt4p[cur_stack.p4].P = 1;
+			pt4p[cur_stack.p4].US = 0;
+			pt4p[cur_stack.p4].RW = 1;
+		}
+	
+		pt3p = (PT3*) (pt4p[cur_stack.p4].BASE << 12);
+		if(pt3p[cur_stack.p3].AVL == 0)
+		{
+			pt3p[cur_stack.p3].BASE = ((uint64_t)alloc_pf() >> 12);
+			pt3p[cur_stack.p3].AVL = 1;
+			pt3p[cur_stack.p3].P = 1;
+			pt3p[cur_stack.p3].US = 0;
+			pt3p[cur_stack.p3].RW = 1;
+		}
+
+		pt2p = (PT2*) (pt3p[cur_stack.p3].BASE << 12);
+		if(pt2p[cur_stack.p2].AVL == 0)
+		{
+			pt2p[cur_stack.p2].BASE = ((uint64_t)alloc_pf() >> 12);
+			pt2p[cur_stack.p2].AVL = 1;
+			pt2p[cur_stack.p2].P = 1;
+			pt2p[cur_stack.p2].US = 0;
+			pt2p[cur_stack.p2].RW = 1;
+		}
+		pt1p = (PT1*) (pt2p[cur_stack.p2].BASE << 12);
+		pt1p[cur_stack.p1].A = 0; //needs to be faulted in
+		pt1p[cur_stack.p1].P = 0;
+		pt1p[cur_stack.p1].US = 0;
+		pt1p[cur_stack.p1].RW = 1;
+		// TEMP
+		ret.pt1_offset = cur_stack.p1;
+		ret.pt2_offset = cur_stack.p2;
+		ret.pt3_offset = cur_stack.p3;
+		ret.pt4_offset = cur_stack.p4;
+		uint64_t* tempv = *( (uint64_t*) &ret);
+		//printk("VIRT ADDR SET = %p\n", tempv);
+		//END TEMP		alloc_heap(511);
+		cur_stack.p1++; //incr stack state
+		if(cur_stack.p1 == PCOUNT)
+		{
+			cur_stack.p2++;
+			cur_stack.p1 = 0;
+			if(cur_stack.p2 == PCOUNT)
+			{
+				cur_stack.p3++;
+				cur_stack.p2 = 0;
+				if(cur_stack.p3 == PCOUNT)
+				{
+					cur_stack.p4++;
+					cur_stack.p3 = 0;
+				}
+			}
+		}
+	}
+	
 	
 	//return top of stack
 	ret.pys_offset = 0;
@@ -190,28 +384,33 @@ void* alloc_stack()
 	ret.pt3_offset = cur_stack.p3;
 	ret.pt4_offset = cur_stack.p4;
 	retval = *((uint64_t*) &ret);
+	UNLOCK;
 	return retval;
 }
 
 void* walk_page_table(uint64_t addr)
 {
+	LOCK;
 	virt_addr vadd;
 	printk("addr %p \n", addr);
 	vadd =  *((virt_addr*) &addr);
 	printk("vaddr %p \n", vadd);
 	uint64_t cur = page_table;
 	
+	printk("pt4 %p\n", *(int*)addr);
 	cur = ((PT4*)cur)[vadd.pt4_offset].BASE << 12;
 	cur = ((PT3*)cur)[vadd.pt3_offset].BASE << 12;
 	cur = ((PT2*)cur)[vadd.pt2_offset].BASE << 12;
 	cur = ((PT1*)cur)[vadd.pt1_offset].BASE << 12;
 	cur = cur + vadd.pys_offset;
 	printk("res %p \n", cur);
+	UNLOCK;
 	return cur;
 }
 
 void init_page_table()
 {
+	LOCK;
 	page_table = (PT4*) alloc_pf();
 	
 	cr3_reg cr3r;
@@ -223,17 +422,24 @@ void init_page_table()
 	//address used for identity map
 	uint64_t cur_addr = 0;
 	
-	//prep heap 
+	//prep stack and heap 
 	cur_stack.p4 = 2;
 	cur_stack.p3 = 0;
 	cur_stack.p2 = 0;
 	cur_stack.p1 = 0;
+
+	cur_heap.p4 = 4;
+	cur_heap.p3 = 0;
+	cur_heap.p2 = 0;
+	cur_heap.p1 = 0;
 	
 
 	//set cr3 and pointer to level four of page table
 	cr3r.base = (uint64_t)page_table >> 12;
-	cr3r.PWT = 1;
-	cr3r.PCD = 1;
+	cr3r.reserved = 0;
+	cr3r.RES1 = 0;
+	cr3r.PWT = 0;
+	cr3r.PCD = 0;
 	pt4p = page_table;
 
 	//make the identity map in slot one of lvl 4
@@ -275,11 +481,10 @@ void init_page_table()
 				if((cur_addr << 12) > max_addr)
 				{
 					int q = 1;
+					irq_set_handler(14, &page_fault_handler, NULL);
 					asm volatile ("movq %0, %%cr3": : "r"(cr3r));
-					flush_tlb();
-					printk("%p \n", alloc_stack());
-					flush_tlb();
-					printk("%p \n", alloc_stack());
+					printk("MAX %p \n", max_addr);
+					UNLOCK;
 					return;
 				}
 			}
@@ -300,6 +505,7 @@ void* alloc_pf(void)
 		
 		temp = free_pages; //get old
 		free_pages = free_pages->next;
+		kmemset(temp,0,FOURK);
 		UNLOCK;
 		return temp;
 	}
@@ -313,6 +519,7 @@ void* alloc_pf(void)
 			if((uint64_t) avail_mem[i].tail - next_avail >= FOURK)
 			{
 				avail_mem[i].head = next_avail + FOURK;
+				kmemset(next_avail,0,FOURK);
 				UNLOCK;
 				return (void*) next_avail;
 			}
@@ -332,7 +539,6 @@ void free_pf(void* freed)
 	{
 		free_pages = freed;
 		free_pages->next = NULL;
-		UNLOCK;
 		return;
 	}
 	temp = free_pages;
@@ -344,6 +550,7 @@ void free_pf(void* freed)
 	temp = temp->next;
 	temp->next = NULL;
 	UNLOCK;
+	
 }
 
 static void parse_memtag(void* ELF)
@@ -351,7 +558,6 @@ static void parse_memtag(void* ELF)
 	mem_map* map;
 	mem_info info;	
 	uint32_t entry_size, total_size, entry_count, cur_block = 0;
-
 	//track end of memory space
 	max_addr = NULL;
 
@@ -466,6 +672,7 @@ void init_mmu(void* ELF)
 	//init page table
 	init_page_table();
 	UNLOCK;
+	
 }
 
 static uint64_t align4k(uint64_t num)

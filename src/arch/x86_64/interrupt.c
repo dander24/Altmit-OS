@@ -266,14 +266,23 @@ void irq_c_handler(int irq, int error)
 	func(irq,error,args);
 	if(irq > 0x1f && irq < 0x30)
 		PIC_sendEOI(irq);
-	else
-		asm("hlt");
+	//else
+		//asm("hlt");
 }
 
 void irq_print_error(int irq, int error, void* args)
 {
 	int i;
+	unsigned long val;
 	printk("INTR %x, %p\n", irq, &i);
+	if(irq == 14)
+	{
+		asm volatile ("mov %%cr2, %0" : "=r"(val));
+		printk("CR2 %p ", val);
+		asm volatile ("mov %%cr3, %0" : "=r"(val));
+		printk("CR3 %p \n", val);
+		asm("hlt");
+	}
 }
 
 void irq_set_handler(int irq, irq_handler_t handler, void* arg)

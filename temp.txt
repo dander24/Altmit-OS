@@ -1,0 +1,3 @@
+ build/arch/x86_64/kernel_main.o  build/arch/x86_64/mmu.o  build/arch/x86_64/VGA.o  build/arch/x86_64/string.o  build/arch/x86_64/interrupt.o  build/arch/x86_64/bio.o  build/arch/x86_64/serial.o  build/arch/x86_64/kmalloc.o  build/arch/x86_64/keyboard.o
+mkfs.fat 3.0.28 (2015-05-16)
+Loop device does not match a floppy size, using default hd params
